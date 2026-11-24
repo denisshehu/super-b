@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="referrer" content="no-referrer">
+<title>Private</title>
+<style>
+  :root { --bg: #f4f4f5; --card: #fff; --text: #18181b; --muted: #71717a; --line: #e4e4e7; --accent: #18181b; --accent-text: #fff; --err: #dc2626; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0b0b0c; --card: #18181b; --text: #f4f4f5; --muted: #a1a1aa; --line: #27272a; --accent: #f4f4f5; --accent-text: #18181b; --err: #f87171; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; display: grid; place-items: center; padding: 16px; }
+  form { width: 100%; max-width: 340px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 28px 24px 22px; }
+  svg { display: block; margin: 0 auto 14px; color: var(--muted); }
+  h1 { font-size: 17px; font-weight: 600; margin: 0 0 4px; text-align: center; }
+  p { margin: 0 0 18px; color: var(--muted); text-align: center; font-size: 14px; }
+  input[type=password] { width: 100%; font: inherit; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: transparent; color: inherit; outline: none; }
+  input[type=password]:focus { border-color: var(--muted); }
+  label { display: flex; gap: 8px; align-items: center; margin: 12px 0 16px; color: var(--muted); font-size: 13px; cursor: pointer; }
+  button { width: 100%; font: inherit; font-weight: 600; padding: 10px; border: 0; border-radius: 9px; background: var(--accent); color: var(--accent-text); cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  .err { color: var(--err); font-size: 13px; min-height: 20px; margin-top: 10px; text-align: center; }
+  a { display: block; text-align: center; color: var(--muted); font-size: 13px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<form id="f" autocomplete="off">
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+  <h1>Private page</h1>
+  <p>Enter the password to continue.</p>
+  <input id="pw" type="password" placeholder="Password" aria-label="Password" autofocus required>
+  <label id="remrow"><input id="rem" type="checkbox" checked> Remember on this device</label>
+  <button id="go" type="submit">Continue</button>
+  <div class="err" id="err" role="alert"></div>
+  <a id="other" href="#forget" hidden>Use the password instead</a>
+</form>
+<script>
+(() => {
+  const ITER = 600000;
+  const STORE = 'k:' + location.pathname;
+  const $ = (id) => document.getElementById(id);
+  let blob = null;
+
+  const b64 = (u8) => btoa(String.fromCharCode(...u8));
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+  async function data() {
+    if (!blob) {
+      const r = await fetch('data.bin', { cache: 'no-cache' });
+      if (!r.ok) throw new Error('missing');
+      blob = new Uint8Array(await r.arrayBuffer());
+    }
+    return blob;
+  }
+
+  async function derive(pw, salt) {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: ITER, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
+  }
+
+  async function unlock(key) {
+    const b = await data();
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.slice(16, 28) }, key, b.slice(28));
+    const stream = new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'));
+    const html = await new Response(stream).text();
+    document.open(); document.write(html); document.close();
+  }
+
+  function store(key) {
+    return crypto.subtle.exportKey('raw', key).then((raw) => {
+      try { localStorage.setItem(STORE, b64(new Uint8Array(raw))); } catch (e) {}
+    });
+  }
+
+  // Start sound while the button is being pressed; browsers only allow it during a click or key press.
+  function primeSound() {
+    try { const A = window.AudioContext || window.webkitAudioContext; if (A && !window.__a) { window.__a = new A(); window.__a.resume(); } } catch (e) {}
+  }
+  function forget() { try { localStorage.removeItem(STORE); } catch (e) {} }
+
+  // A remembered device skips the password but still asks for one click on Continue.
+  // Opening the page with #forget clears the memory and asks for the password again.
+  let remembered = null;
+  if (location.hash === '#forget') { forget(); history.replaceState(null, '', location.pathname + location.search); }
+  try { remembered = localStorage.getItem(STORE); } catch (e) {}
+  if (remembered) {
+    $('pw').hidden = true; $('pw').required = false; $('remrow').hidden = true; $('other').hidden = false;
+    document.querySelector('p').textContent = 'This device is remembered.';
+    $('go').focus();
+  }
+  $('other').addEventListener('click', (e) => {
+    e.preventDefault(); forget(); remembered = null;
+    $('pw').hidden = false; $('pw').required = true; $('remrow').hidden = false; $('other').hidden = true;
+    document.querySelector('p').textContent = 'Enter the password to continue.';
+    $('pw').focus();
+  });
+
+  $('f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    primeSound();
+    if (remembered) {
+      try {
+        const key = await crypto.subtle.importKey('raw', unb64(remembered), { name: 'AES-GCM' }, true, ['decrypt']);
+        await unlock(key);
+      } catch (err) { forget(); location.reload(); }
+      return;
+    }
+    const pw = $('pw').value;
+    if (!pw) return;
+    $('go').disabled = true; $('go').textContent = 'Checking…'; $('err').textContent = '';
+    try {
+      if (!window.crypto || !crypto.subtle || !window.DecompressionStream) throw new Error('old');
+      const b = await data();
+      const key = await derive(pw, b.slice(0, 16));
+      try { await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.slice(16, 28) }, key, b.slice(28)); }
+      catch (err) { throw new Error('wrong'); }
+      if ($('rem').checked) await store(key);
+      await unlock(key);
+    } catch (err) {
+      $('err').textContent = err.message === 'wrong' ? 'Incorrect password.' : err.message === 'old' ? 'Please open this page in an up-to-date browser.' : 'Something went wrong. Please try again.';
+      $('go').disabled = false; $('go').textContent = 'Continue';
+      $('pw').select();
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
